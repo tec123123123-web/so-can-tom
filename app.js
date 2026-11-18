@@ -2,7 +2,7 @@
 (function () {
 'use strict';
 const C = window.Calc;
-const APP_VERSION = '1.0.1';
+const APP_VERSION = '1.0.2';
 
 /* ================= Tiện ích ================= */
 const $ = (sel, el) => (el || document).querySelector(sel);
@@ -279,7 +279,7 @@ function updGrid(scrollEnd) {
     for (let r = 0; r < per; r++) {
       const idx = ci * per + r; const b = col.items[r];
       const sep = (per === 10 && r === 4) ? ' sep' : '';
-      if (b) h += '<div class="cell' + sep + (b.id === lastId && !W.input ? ' last' : '') + (b.ed ? ' edited' : '') + '" data-b="' + b.id + '">' + C.fmtKgC(b.c, d) + '</div>';
+      if (b) h += '<div class="cell' + sep + (b.id === lastId && !W.input ? ' last' : '') + (b.ed ? ' edited' : '') + '" data-b="' + b.id + '"' + (b.id === lastId ? ' data-last="1"' : '') + '>' + C.fmtKgC(b.c, d) + '</div>';
       else if (showCur && idx === nextIdx) h += '<div class="cell cur' + sep + (W.prompt ? ' warn' : '') + (W.input ? '' : ' blink') + '" id="curCell">' + esc(W.input) + '</div>';
       else h += '<div class="cell e' + sep + '"></div>';
     }
@@ -291,6 +291,8 @@ function updGrid(scrollEnd) {
 }
 function updMsg() {
   const s = curSheet(), d = dec(s), el = $('#wMsg'); let h = '';
+  const sig = (W.prompt ? 'p' + W.prompt.c : '') + (W.hint ? 'h' + W.hint.id + W.hint.c : '') + (!s.locked && !s.baskets.length && !W.input ? 'i' + s.entry.mode : '');
+  if (el.dataset.sig === sig) return; el.dataset.sig = sig;
   if (W.prompt) {
     const p = W.prompt;
     const typ = C.fmtKgC(p.an.typical, d);
@@ -315,8 +317,12 @@ function updMsg() {
     W.hint = null; updWeigh();
   };
 }
+function padSig(s) { return [s.locked, W.hide, s.entry.mode, s.entry.maxKg, dec(s)].join('|'); }
 function updPad() {
-  const s = curSheet(), el = $('#wPad');
+  const s = curSheet(), el = $('#wPad'), sig = padSig(s);
+  if (el.dataset.sig === sig && el.firstChild) { refreshPad(); return; }
+  el.dataset.sig = sig;
+  el.onpointerdown = null; el.onclick = null;
   if (s.locked) {
     el.className = 'lockbar';
     el.innerHTML = '<span class="tx">Bảng đã kết sổ, không ghi thêm rổ.</span><button class="btn sec" id="unlock">Mở lại</button><button class="btn" id="lkR">Phiếu</button>';
@@ -332,19 +338,47 @@ function updPad() {
   }
   el.className = 'pad';
   const quick = s.entry.mode === 'quick', d = dec(s);
-  const parsed = quick ? C.parseQuick(W.input, d, s.entry.maxKg) : C.parseDirect(W.input, d);
-  const blocked = !!W.prompt;
-  const goLbl = parsed ? 'Ghi<small>' + C.fmtKgC(parsed.c, d) + ' kg</small>' : (quick ? 'Tự ghi' : 'Ghi');
-  const k = (n) => '<button class="k" data-k="' + n + '"' + (blocked ? ' disabled' : '') + '>' + n + '</button>';
+  const k = (n) => '<button class="k" data-k="' + n + '">' + n + '</button>';
   const modeLbl = quick ? (s.entry.maxKg >= 1000 ? '2185 → 218,5' : s.entry.maxKg >= 100 ? (d === 2 ? '2185 → 21,85' : '218 → 21,8') : (d === 2 ? '218 → 2,18' : '21 → 2,1')) : '21,8 rồi Ghi';
   el.innerHTML = '<div class="keys">' +
-    k(1) + k(2) + k(3) + '<button class="k fn ' + (s.baskets.length || W.input ? 'hot' : '') + '" data-k="undo">' + IC.undo + (W.input ? 'Xóa số' : 'Hoàn tác rổ') + '</button>' +
-    k(4) + k(5) + k(6) + '<button class="k fn" data-k="hide">' + IC.down + 'Ẩn phím</button>' +
-    k(7) + k(8) + k(9) + '<button class="k fn" data-k="mode">Cách nhập<small>' + modeLbl + '</small></button>' +
-    '<button class="k" data-k=","' + (quick || blocked ? ' disabled' : '') + '>,</button>' + k(0) +
+    k(1) + k(2) + k(3) + '<button class="k fn" data-k="undo" data-fn="1"></button>' +
+    k(4) + k(5) + k(6) + '<button class="k fn" data-k="hide" data-fn="1">' + IC.down + 'Ẩn phím</button>' +
+    k(7) + k(8) + k(9) + '<button class="k fn" data-k="mode" data-fn="1">Cách nhập<small>' + modeLbl + '</small></button>' +
+    '<button class="k" data-k=",">,</button>' + k(0) +
     '<button class="k" data-k="bs" aria-label="Xóa">' + IC.bs + '</button>' +
-    '<button class="k go" data-k="go"' + (parsed && !blocked ? '' : ' disabled') + '>' + goLbl + '</button></div>';
-  el.onclick = (e) => { const b = e.target.closest('[data-k]'); if (b && !b.disabled) key(b.dataset.k); };
+    '<button class="k go" data-k="go"></button></div>';
+  // Phím số: nhận ngay khi chạm xuống (không chờ nhấc tay, không bị Safari nuốt khi bấm nhanh)
+  el.onpointerdown = (e) => {
+    const b = e.target.closest('[data-k]'); if (!b || b.disabled || b.dataset.fn) return;
+    e.preventDefault();
+    b.classList.add('down'); setTimeout(() => b.classList.remove('down'), 110);
+    key(b.dataset.k);
+  };
+  // Phím chức năng: bấm thường (tránh chạm xuyên vào bảng vừa mở)
+  el.onclick = (e) => { const b = e.target.closest('[data-fn]'); if (b && !b.disabled) key(b.dataset.k); };
+  refreshPad();
+}
+function refreshPad() {
+  const s = curSheet(), el = $('#wPad'); if (!el || el.className !== 'pad') return;
+  const quick = s.entry.mode === 'quick', d = dec(s);
+  const parsed = quick ? C.parseQuick(W.input, d, s.entry.maxKg) : C.parseDirect(W.input, d);
+  const blocked = !!W.prompt;
+  el.querySelectorAll('.k[data-k]').forEach(b => { if (/^\d$/.test(b.dataset.k)) b.disabled = blocked; });
+  el.querySelector('[data-k=","]').disabled = quick || blocked;
+  const go = el.querySelector('[data-k="go"]');
+  go.disabled = !(parsed && !blocked);
+  const gl = parsed ? 'Ghi<small>' + C.fmtKgC(parsed.c, d) + ' kg</small>' : (quick ? 'Tự ghi' : 'Ghi');
+  if (go.innerHTML !== gl) go.innerHTML = gl;
+  const un = el.querySelector('[data-k="undo"]');
+  const ul = IC.undo + (W.input ? 'Xóa số' : 'Hoàn tác rổ');
+  if (un.innerHTML !== ul) un.innerHTML = ul;
+  un.classList.toggle('hot', !!(s.baskets.length || W.input));
+}
+function lightUpdate() {
+  const cc = $('#curCell');
+  if (cc) { cc.textContent = W.input; cc.classList.toggle('blink', !W.input); cc.classList.toggle('warn', !!W.prompt); }
+  const lc = $('#grid [data-last]'); if (lc) lc.classList.toggle('last', !W.input);
+  updMsg(); refreshPad();
 }
 function key(k) {
   const s = curSheet(); const quick = s.entry.mode === 'quick', d = dec(s), mk = s.entry.maxKg;
@@ -369,8 +403,8 @@ function key(k) {
   } else if (k === 'undo') { if (W.input) W.input = ''; else undoLast(s); return updWeigh(); }
   else if (k === 'hide') { W.hide = true; return updPad(); }
   else if (k === 'mode') { return openEntrySettings(s); }
-  updGrid(false); updMsg(); updPad();
-  const cc = $('#curCell'); if (cc) cc.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  lightUpdate();
+  if (W.input.length === 1) { const cc = $('#curCell'); if (cc) cc.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
 }
 function tryCommit(c) {
   const s = curSheet(), d = dec(s), mk = s.entry.maxKg;
@@ -378,7 +412,7 @@ function tryCommit(c) {
   if (c >= mk * 100) { toast('Mỗi rổ tối đa ' + C.fmtKgC(mk * 100 - (d === 2 ? 1 : 10), d) + ' kg. Đổi ở "Cách nhập".'); W.input = ''; return updWeigh(); }
   const recent = C.activeBaskets(s).map(b => b.c);
   const an = C.checkAnomaly(c, recent, mk);
-  if (an && an.type === 'big') { W.prompt = { c, an }; updGrid(false); updMsg(); updPad(); speak('Kiểm tra lại'); return; }
+  if (an && an.type === 'big') { W.prompt = { c, an }; lightUpdate(); speak('Kiểm tra lại'); return; }
   addBasket(c);
   if (an && an.type === 'small') { W.hint = { id: s.baskets[s.baskets.length - 1].id, c, suggest: an.suggest }; updMsg(); }
 }
@@ -828,7 +862,18 @@ async function boot() {
   if (!m) await saveMeta();
   render();
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    const hadCtl = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.register('sw.js').then(reg => {
+      // Kiểm tra bản mới mỗi khi mở lại app
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+    }).catch(() => {});
+    // Có bản mới: tự tải lại khi không đang gõ số
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadCtl) return;
+      const doReload = () => location.reload();
+      if (S.view === 'weigh' && (W.input || W.prompt)) toast('Đã có bản mới', 'Tải lại', doReload, 8000);
+      else doReload();
+    });
   }
 }
 // Bàn phím thật (iPad có bàn phím rời / máy tính)
